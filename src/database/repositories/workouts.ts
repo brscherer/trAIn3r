@@ -9,6 +9,25 @@ import type {
   WorkoutRow,
 } from '@/src/database/types';
 
+export type WorkoutSetInput = Omit<NewSetLog, 'exerciseLogId'>;
+
+export type WorkoutExerciseInput = {
+  name: string;
+  sets: WorkoutSetInput[];
+};
+
+export type WorkoutWithDetailsInput = NewWorkout & {
+  exercises: WorkoutExerciseInput[];
+};
+
+export type ExerciseLogWithSets = ExerciseLogRow & {
+  sets: SetLogRow[];
+};
+
+export type WorkoutWithDetails = WorkoutRow & {
+  exercises: ExerciseLogWithSets[];
+};
+
 export async function createWorkout(db: SQLiteDatabase, input: NewWorkout) {
   const result = await db.runAsync(
     'INSERT INTO workouts (date, type) VALUES (?, ?)',
@@ -67,3 +86,53 @@ export async function listSetLogsForExercise(db: SQLiteDatabase, exerciseLogId: 
   );
 }
 
+export async function saveWorkoutWithDetails(db: SQLiteDatabase, input: WorkoutWithDetailsInput) {
+  let workoutId = 0;
+
+  await db.withExclusiveTransactionAsync(async (txn) => {
+    workoutId = await createWorkout(txn, {
+      date: input.date,
+      type: input.type,
+    });
+
+    for (const exercise of input.exercises) {
+      const exerciseLogId = await createExerciseLog(txn, {
+        workoutId,
+        name: exercise.name,
+      });
+
+      for (const set of exercise.sets) {
+        await createSetLog(txn, {
+          exerciseLogId,
+          reps: set.reps,
+          weight: set.weight,
+          rir: set.rir,
+        });
+      }
+    }
+  });
+
+  return workoutId;
+}
+
+export async function listWorkoutsWithDetails(db: SQLiteDatabase) {
+  const workouts = await listWorkouts(db);
+
+  return Promise.all(
+    workouts.map(async (workout): Promise<WorkoutWithDetails> => {
+      const exercises = await listExerciseLogsForWorkout(db, workout.id);
+
+      const exercisesWithSets = await Promise.all(
+        exercises.map(async (exercise): Promise<ExerciseLogWithSets> => ({
+          ...exercise,
+          sets: await listSetLogsForExercise(db, exercise.id),
+        }))
+      );
+
+      return {
+        ...workout,
+        exercises: exercisesWithSets,
+      };
+    })
+  );
+}
