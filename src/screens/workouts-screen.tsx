@@ -18,6 +18,10 @@ import {
   type WorkoutWithDetails,
   type WorkoutWithDetailsInput,
 } from '@/src/database/repositories/workouts';
+import {
+  getProgressionSuggestion,
+  type ProgressionSuggestion,
+} from '@/src/features/progression/engine';
 import type { SQLiteDatabase } from 'expo-sqlite';
 
 type SetDraft = {
@@ -28,6 +32,7 @@ type SetDraft = {
 
 type ExerciseDraft = {
   name: string;
+  maxRange: string;
   sets: SetDraft[];
 };
 
@@ -50,6 +55,7 @@ function createEmptyDraft(): WorkoutDraft {
     exercises: [
       {
         name: '',
+        maxRange: '12',
         sets: [{ ...EMPTY_SET }],
       },
     ],
@@ -89,11 +95,15 @@ export function WorkoutsScreen() {
     }));
   }
 
-  function updateExerciseName(exerciseIndex: number, value: string) {
+  function updateExerciseField(
+    exerciseIndex: number,
+    field: 'name' | 'maxRange',
+    value: string
+  ) {
     setDraft((current) => ({
       ...current,
       exercises: current.exercises.map((exercise, index) =>
-        index === exerciseIndex ? { ...exercise, name: value } : exercise
+        index === exerciseIndex ? { ...exercise, [field]: value } : exercise
       ),
     }));
   }
@@ -128,6 +138,7 @@ export function WorkoutsScreen() {
         ...current.exercises,
         {
           name: '',
+          maxRange: '12',
           sets: [{ ...EMPTY_SET }],
         },
       ],
@@ -172,6 +183,29 @@ export function WorkoutsScreen() {
         return {
           ...exercise,
           sets: exercise.sets.filter((_, currentSetIndex) => currentSetIndex !== setIndex),
+        };
+      }),
+    }));
+  }
+
+  function applySuggestedWeight(exerciseIndex: number, weight: number) {
+    const formattedWeight = formatWeight(weight);
+
+    setDraft((current) => ({
+      ...current,
+      exercises: current.exercises.map((exercise, index) => {
+        if (index !== exerciseIndex) {
+          return exercise;
+        }
+
+        return {
+          ...exercise,
+          sets: exercise.sets.map((set) => {
+            const currentWeight = Number(set.weight);
+            const isUnsetWeight = !set.weight.trim() || currentWeight === 0;
+
+            return isUnsetWeight ? { ...set, weight: formattedWeight } : set;
+          }),
         };
       }),
     }));
@@ -283,10 +317,24 @@ export function WorkoutsScreen() {
                 </ThemedText>
               </Pressable>
             </View>
-            <WorkoutInput
-              value={exercise.name}
-              onChangeText={(value) => updateExerciseName(exerciseIndex, value)}
-              placeholder="Exercise name"
+            <Field label="Exercise name">
+              <WorkoutInput
+                value={exercise.name}
+                onChangeText={(value) => updateExerciseField(exerciseIndex, 'name', value)}
+                placeholder="Exercise name"
+              />
+            </Field>
+            <Field label="Max reps before increasing weight">
+              <WorkoutInput
+                value={exercise.maxRange}
+                onChangeText={(value) => updateExerciseField(exerciseIndex, 'maxRange', value)}
+                keyboardType="number-pad"
+              />
+            </Field>
+
+            <ProgressionCard
+              suggestion={getSuggestionForExercise(exercise, savedWorkouts)}
+              onApplySuggestion={(weight) => applySuggestedWeight(exerciseIndex, weight)}
             />
 
             {exercise.sets.map((set, setIndex) => (
@@ -408,10 +456,6 @@ function Field({
   );
 }
 
-async function fetchSavedWorkouts(db: SQLiteDatabase) {
-  return listWorkoutsWithDetails(db);
-}
-
 function WorkoutInput({
   value,
   onChangeText,
@@ -436,6 +480,72 @@ function WorkoutInput({
       style={styles.input}
     />
   );
+}
+
+function ProgressionCard({
+  suggestion,
+  onApplySuggestion,
+}: {
+  suggestion: ProgressionSuggestion | null;
+  onApplySuggestion: (weight: number) => void;
+}) {
+  if (!suggestion) {
+    return (
+      <ThemedView style={styles.progressionCard}>
+        <ThemedText type="defaultSemiBold">Progression</ThemedText>
+        <ThemedText style={styles.progressionBody}>
+          Save at least one workout for this exercise to unlock automatic next-weight suggestions.
+        </ThemedText>
+      </ThemedView>
+    );
+  }
+
+  return (
+    <ThemedView
+      style={[
+        styles.progressionCard,
+        suggestion.action === 'increase' ? styles.progressionIncrease : styles.progressionMaintain,
+      ]}>
+      <ThemedText type="defaultSemiBold">
+        {suggestion.action === 'increase' ? 'Increase weight' : 'Maintain weight'}
+      </ThemedText>
+      <ThemedText style={styles.progressionBody}>{suggestion.reason}</ThemedText>
+      <ThemedText style={styles.progressionMeta}>
+        Last reference: {suggestion.referenceDate} • {suggestion.referenceReps} reps @{' '}
+        {formatWeight(suggestion.referenceWeight)} kg
+      </ThemedText>
+      <ThemedText style={styles.progressionTarget}>
+        Suggested working weight: {formatWeight(suggestion.suggestedWeight)} kg
+      </ThemedText>
+      <ActionButton
+        label="Apply suggested weight"
+        onPress={() => onApplySuggestion(suggestion.suggestedWeight)}
+        variant="secondary"
+      />
+    </ThemedView>
+  );
+}
+
+async function fetchSavedWorkouts(db: SQLiteDatabase) {
+  return listWorkoutsWithDetails(db);
+}
+
+function getSuggestionForExercise(exercise: ExerciseDraft, workouts: WorkoutWithDetails[]) {
+  const maxRange = Number(exercise.maxRange);
+
+  if (!Number.isFinite(maxRange) || maxRange <= 0) {
+    return null;
+  }
+
+  return getProgressionSuggestion({
+    exerciseName: exercise.name,
+    workouts,
+    maxRange,
+  });
+}
+
+function formatWeight(value: number) {
+  return Number.isInteger(value) ? String(value) : value.toFixed(2);
 }
 
 function ActionButton({
@@ -542,6 +652,31 @@ const styles = StyleSheet.create({
     backgroundColor: '#E7F1EA',
     borderWidth: 1,
     borderColor: '#C8D9CD',
+  },
+  progressionCard: {
+    gap: 8,
+    borderRadius: 16,
+    padding: 12,
+    borderWidth: 1,
+  },
+  progressionIncrease: {
+    backgroundColor: '#EDF7EF',
+    borderColor: '#B9D9BF',
+  },
+  progressionMaintain: {
+    backgroundColor: '#F4F3EA',
+    borderColor: '#D9D2A8',
+  },
+  progressionBody: {
+    opacity: 0.82,
+  },
+  progressionMeta: {
+    fontSize: 13,
+    opacity: 0.7,
+  },
+  progressionTarget: {
+    fontWeight: '700',
+    color: '#1E4D37',
   },
   primaryButtonText: {
     color: '#F4F7F3',
