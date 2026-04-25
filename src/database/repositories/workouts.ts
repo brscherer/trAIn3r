@@ -87,32 +87,44 @@ export async function listSetLogsForExercise(db: SQLiteDatabase, exerciseLogId: 
 }
 
 export async function saveWorkoutWithDetails(db: SQLiteDatabase, input: WorkoutWithDetailsInput) {
-  let workoutId = 0;
+  const [workoutId] = await saveWorkoutsWithDetails(db, [input]);
+  return workoutId;
+}
+
+export async function saveWorkoutsWithDetails(
+  db: SQLiteDatabase,
+  inputs: WorkoutWithDetailsInput[]
+) {
+  const workoutIds: number[] = [];
 
   await db.withExclusiveTransactionAsync(async (txn) => {
-    workoutId = await createWorkout(txn, {
-      date: input.date,
-      type: input.type,
-    });
-
-    for (const exercise of input.exercises) {
-      const exerciseLogId = await createExerciseLog(txn, {
-        workoutId,
-        name: exercise.name,
+    for (const input of inputs) {
+      const workoutId = await createWorkout(txn, {
+        date: input.date,
+        type: input.type,
       });
 
-      for (const set of exercise.sets) {
-        await createSetLog(txn, {
-          exerciseLogId,
-          reps: set.reps,
-          weight: set.weight,
-          rir: set.rir,
+      for (const exercise of input.exercises) {
+        const exerciseLogId = await createExerciseLog(txn, {
+          workoutId,
+          name: exercise.name,
         });
+
+        for (const set of exercise.sets) {
+          await createSetLog(txn, {
+            exerciseLogId,
+            reps: set.reps,
+            weight: set.weight,
+            rir: set.rir,
+          });
+        }
       }
+
+      workoutIds.push(workoutId);
     }
   });
 
-  return workoutId;
+  return workoutIds;
 }
 
 export async function listWorkoutsWithDetails(db: SQLiteDatabase) {
