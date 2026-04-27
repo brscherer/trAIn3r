@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Alert, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import * as DocumentPicker from 'expo-document-picker';
+import { File } from 'expo-file-system';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -22,6 +24,7 @@ export function ImportScreen() {
   const [csvInput, setCsvInput] = useState(CSV_TEMPLATE);
   const [preview, setPreview] = useState<ParsedImportPlan | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isPickingFile, setIsPickingFile] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
   const previewSummary = useMemo(() => {
@@ -40,6 +43,33 @@ export function ImportScreen() {
     } catch (error) {
       setPreview(null);
       setErrorMessage(error instanceof Error ? error.message : 'Unable to parse the CSV.');
+    }
+  }
+
+  async function handlePickFile() {
+    setIsPickingFile(true);
+
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: ['text/csv', 'text/plain', 'application/vnd.ms-excel'],
+        copyToCacheDirectory: true,
+      });
+
+      if (result.canceled) {
+        return;
+      }
+
+      const asset = result.assets[0];
+      const file = new File(asset.uri);
+      const fileContents = file.textSync();
+
+      setCsvInput(fileContents);
+      setPreview(null);
+      setErrorMessage(null);
+    } catch {
+      setErrorMessage('Unable to read the selected file.');
+    } finally {
+      setIsPickingFile(false);
     }
   }
 
@@ -86,11 +116,17 @@ export function ImportScreen() {
         />
 
         <View style={styles.buttonRow}>
+          <ActionButton
+            label={isPickingFile ? 'Opening files...' : 'Choose CSV file'}
+            onPress={handlePickFile}
+            variant="secondary"
+            disabled={isPickingFile || isSaving}
+          />
           <ActionButton label="Preview import" onPress={handlePreview} variant="secondary" />
           <ActionButton
             label={isSaving ? 'Importing...' : 'Import plan'}
             onPress={handleImport}
-            disabled={isSaving || preview == null}
+            disabled={isSaving || isPickingFile || preview == null}
           />
         </View>
 
